@@ -149,8 +149,26 @@ fun ChatScreen(viewModel: ChatViewModel) {
             onShowAppInfo = { viewModel.showAppInfo() },
             onPanicClear = { viewModel.panicClearAllData() }
         )
-        
-        // Sidebar overlay
+
+        val alpha by animateFloatAsState(
+            targetValue = if (showSidebar) 0.5f else 0f,
+            animationSpec = tween(
+                durationMillis = 300,
+                easing = EaseOutCubic
+            ), label = "overlayAlpha"
+        )
+
+        // Only render the background if it's visible
+        if (alpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = alpha))
+                    .clickable { viewModel.hideSidebar() }
+                    .zIndex(1f)
+            )
+        }
+
         AnimatedVisibility(
             visible = showSidebar,
             enter = slideInHorizontally(
