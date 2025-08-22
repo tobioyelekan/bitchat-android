@@ -1,9 +1,12 @@
 package com.bitchat.android.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,7 +35,9 @@ fun MessagesList(
     currentUserNickname: String,
     meshService: BluetoothMeshService,
     modifier: Modifier = Modifier,
-    forceScrollToBottom: Boolean = false
+    forceScrollToBottom: Boolean = false,
+    onNicknameClick: ((String) -> Unit)? = null,
+    onNicknameLongPress: ((String) -> Unit)? = null
 ) {
     val listState = rememberLazyListState()
     
@@ -76,18 +81,23 @@ fun MessagesList(
                 MessageItem(
                     message = message,
                     currentUserNickname = currentUserNickname,
-                    meshService = meshService
+                    meshService = meshService,
+                    onNicknameClick = onNicknameClick,
+                    onNicknameLongPress = onNicknameLongPress
                 )
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageItem(
     message: BitchatMessage,
     currentUserNickname: String,
-    meshService: BluetoothMeshService
+    meshService: BluetoothMeshService,
+    onNicknameClick: ((String) -> Unit)? = null,
+    onNicknameLongPress: ((String) -> Unit)? = null
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val timeFormatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
@@ -97,19 +107,16 @@ fun MessageItem(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top
     ) {
-        // Single text view for natural wrapping (like iOS)
-        Text(
-            text = formatMessageAsAnnotatedString(
-                message = message,
-                currentUserNickname = currentUserNickname,
-                meshService = meshService,
-                colorScheme = colorScheme,
-                timeFormatter = timeFormatter
-            ),
-            modifier = Modifier.weight(1f),
-            fontFamily = FontFamily.Monospace,
-            softWrap = true,
-            overflow = TextOverflow.Visible
+        // Create a custom layout that combines selectable text with clickable nickname areas
+        MessageTextWithClickableNicknames(
+            message = message,
+            currentUserNickname = currentUserNickname,
+            meshService = meshService,
+            colorScheme = colorScheme,
+            timeFormatter = timeFormatter,
+            onNicknameClick = onNicknameClick,
+            onNicknameLongPress = onNicknameLongPress,
+            modifier = Modifier.weight(1f)
         )
         
         // Delivery status for private messages
@@ -117,6 +124,85 @@ fun MessageItem(
             message.deliveryStatus?.let { status ->
                 DeliveryStatusIcon(status = status)
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MessageTextWithClickableNicknames(
+    message: BitchatMessage,
+    currentUserNickname: String,
+    meshService: BluetoothMeshService,
+    colorScheme: ColorScheme,
+    timeFormatter: SimpleDateFormat,
+    onNicknameClick: ((String) -> Unit)?,
+    onNicknameLongPress: ((String) -> Unit)?,
+    modifier: Modifier = Modifier
+) {
+    val annotatedText = formatMessageAsAnnotatedString(
+        message = message,
+        currentUserNickname = currentUserNickname,
+        meshService = meshService,
+        colorScheme = colorScheme,
+        timeFormatter = timeFormatter
+    )
+    
+    // Check if this message was sent by self to avoid click interactions on own nickname
+    val isSelf = message.senderPeerID == meshService.myPeerID || 
+                 message.sender == currentUserNickname ||
+                 message.sender.startsWith("$currentUserNickname#")
+    
+    if (!isSelf && (onNicknameClick != null || onNicknameLongPress != null)) {
+        // Use Text with combinedClickable for nickname interactions
+        Text(
+            text = annotatedText,
+            modifier = modifier.combinedClickable(
+                onClick = {
+                    // We can't get the click offset here, so we'll handle the first nickname
+                    val nicknameAnnotations = annotatedText.getStringAnnotations(
+                        tag = "nickname_click",
+                        start = 0,
+                        end = annotatedText.length
+                    )
+                    if (nicknameAnnotations.isNotEmpty()) {
+                        val nickname = nicknameAnnotations.first().item
+                        onNicknameClick?.invoke(nickname)
+                    }
+                },
+                onLongClick = {
+                    // Handle long press for the first nickname
+                    val nicknameAnnotations = annotatedText.getStringAnnotations(
+                        tag = "nickname_click",
+                        start = 0,
+                        end = annotatedText.length
+                    )
+                    if (nicknameAnnotations.isNotEmpty()) {
+                        val nickname = nicknameAnnotations.first().item
+                        onNicknameLongPress?.invoke(nickname)
+                    }
+                }
+            ),
+            fontFamily = FontFamily.Monospace,
+            softWrap = true,
+            overflow = TextOverflow.Visible,
+            style = androidx.compose.ui.text.TextStyle(
+                color = colorScheme.onSurface
+            )
+        )
+    } else {
+        // Use selectable text when no interactions needed
+        SelectionContainer {
+            Text(
+                text = annotatedText,
+                modifier = modifier,
+                fontFamily = FontFamily.Monospace,
+                softWrap = true,
+                overflow = TextOverflow.Visible,
+                style = androidx.compose.ui.text.TextStyle(
+                    color = colorScheme.onSurface
+                )
+            )
         }
     }
 }

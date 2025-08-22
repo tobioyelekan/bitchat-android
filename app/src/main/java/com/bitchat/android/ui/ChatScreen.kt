@@ -50,6 +50,8 @@ fun ChatScreen(viewModel: ChatViewModel) {
     var showPasswordDialog by remember { mutableStateOf(false) }
     var passwordInput by remember { mutableStateOf("") }
     var showLocationChannelsSheet by remember { mutableStateOf(false) }
+    var showUserSheet by remember { mutableStateOf(false) }
+    var selectedUserForSheet by remember { mutableStateOf("") }
     var forceScrollToBottom by remember { mutableStateOf(false) }
 
     // Show password dialog when needed
@@ -87,7 +89,42 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 currentUserNickname = nickname,
                 meshService = viewModel.meshService,
                 modifier = Modifier.weight(1f),
-                forceScrollToBottom = forceScrollToBottom
+                forceScrollToBottom = forceScrollToBottom,
+                onNicknameClick = { fullSenderName ->
+                    // Single click - mention user in text input
+                    val currentText = messageText.text
+                    
+                    // Extract base nickname and hash suffix from full sender name
+                    val (baseName, hashSuffix) = splitSuffix(fullSenderName)
+                    
+                    // Check if we're in a geohash channel to include hash suffix
+                    val selectedLocationChannel = viewModel.selectedLocationChannel.value
+                    val mentionText = if (selectedLocationChannel is com.bitchat.android.geohash.ChannelID.Location && hashSuffix.isNotEmpty()) {
+                        // In geohash chat - include the hash suffix from the full display name
+                        "@$baseName$hashSuffix"
+                    } else {
+                        // Regular chat - just the base nickname
+                        "@$baseName"
+                    }
+                    
+                    val newText = when {
+                        currentText.isEmpty() -> "$mentionText "
+                        currentText.endsWith(" ") -> "$currentText$mentionText "
+                        else -> "$currentText $mentionText "
+                    }
+                    
+                    messageText = TextFieldValue(
+                        text = newText,
+                        selection = TextRange(newText.length)
+                    )
+                },
+                onNicknameLongPress = { fullSenderName ->
+                    // Long press - open user action sheet
+                    // Extract base nickname from full sender name
+                    val (baseName, _) = splitSuffix(fullSenderName)
+                    selectedUserForSheet = baseName
+                    showUserSheet = true
+                }
             )
             // Input area - stays at bottom
             ChatInputSection(
@@ -205,6 +242,9 @@ fun ChatScreen(viewModel: ChatViewModel) {
         onAppInfoDismiss = { viewModel.hideAppInfo() },
         showLocationChannelsSheet = showLocationChannelsSheet,
         onLocationChannelsSheetDismiss = { showLocationChannelsSheet = false },
+        showUserSheet = showUserSheet,
+        onUserSheetDismiss = { showUserSheet = false },
+        selectedUserForSheet = selectedUserForSheet,
         viewModel = viewModel
     )
 }
@@ -337,6 +377,9 @@ private fun ChatDialogs(
     onAppInfoDismiss: () -> Unit,
     showLocationChannelsSheet: Boolean,
     onLocationChannelsSheetDismiss: () -> Unit,
+    showUserSheet: Boolean,
+    onUserSheetDismiss: () -> Unit,
+    selectedUserForSheet: String,
     viewModel: ChatViewModel
 ) {
     // Password dialog
@@ -360,6 +403,16 @@ private fun ChatDialogs(
         LocationChannelsSheet(
             isPresented = showLocationChannelsSheet,
             onDismiss = onLocationChannelsSheetDismiss,
+            viewModel = viewModel
+        )
+    }
+    
+    // User action sheet
+    if (showUserSheet) {
+        ChatUserSheet(
+            isPresented = showUserSheet,
+            onDismiss = onUserSheetDismiss,
+            targetNickname = selectedUserForSheet,
             viewModel = viewModel
         )
     }

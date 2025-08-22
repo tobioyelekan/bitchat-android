@@ -28,7 +28,8 @@ class NostrGeohashService(
     private val messageManager: MessageManager,
     private val privateChatManager: PrivateChatManager,
     private val meshDelegateHandler: MeshDelegateHandler,
-    private val coroutineScope: CoroutineScope
+    private val coroutineScope: CoroutineScope,
+    private val dataManager: com.bitchat.android.ui.DataManager
 ) {
     
     companion object {
@@ -49,7 +50,8 @@ class NostrGeohashService(
             messageManager: MessageManager,
             privateChatManager: PrivateChatManager,
             meshDelegateHandler: MeshDelegateHandler,
-            coroutineScope: CoroutineScope
+            coroutineScope: CoroutineScope,
+            dataManager: com.bitchat.android.ui.DataManager
         ): NostrGeohashService {
             return synchronized(this) {
                 INSTANCE ?: NostrGeohashService(
@@ -58,7 +60,8 @@ class NostrGeohashService(
                     messageManager,
                     privateChatManager,
                     meshDelegateHandler,
-                    coroutineScope
+                    coroutineScope,
+                    dataManager
                 ).also { INSTANCE = it }
             }
         }
@@ -914,6 +917,12 @@ class NostrGeohashService(
                 return
             }
             
+            // Check if this user is blocked in geohash channels BEFORE any processing
+            if (isGeohashUserBlocked(event.pubkey)) {
+                Log.v(TAG, "🚫 Skipping event from blocked geohash user: ${event.pubkey.take(8)}...")
+                return
+            }
+            
             // Deduplicate events
             if (processedNostrEvents.contains(event.id)) {
                 Log.v(TAG, "❌ Skipping duplicate event ${event.id.take(8)}...")
@@ -1262,6 +1271,51 @@ class NostrGeohashService(
                 Log.e(TAG, "Failed to send Nostr geohash read receipt: ${e.message}")
             }
         }
+    }
+    
+    // MARK: - Geohash Blocking
+    
+    /**
+     * Block a user in geohash channels by their nickname
+     */
+    fun blockUserInGeohash(targetNickname: String) {
+        // Find the pubkey for this nickname
+        val pubkeyHex = geoNicknames.entries.firstOrNull { (_, nickname) ->
+            val baseName = nickname.split("#").firstOrNull() ?: nickname
+            baseName == targetNickname
+        }?.key
+        
+        if (pubkeyHex != null) {
+            // Add to geohash block list
+            dataManager.addGeohashBlockedUser(pubkeyHex)
+            
+            // Add system message
+            val systemMessage = com.bitchat.android.model.BitchatMessage(
+                sender = "system",
+                content = "blocked $targetNickname in geohash channels",
+                timestamp = java.util.Date(),
+                isRelay = false
+            )
+            messageManager.addMessage(systemMessage)
+            
+            Log.i(TAG, "🚫 Blocked geohash user: $targetNickname (pubkey: ${pubkeyHex.take(8)}...)")
+        } else {
+            // User not found
+            val systemMessage = com.bitchat.android.model.BitchatMessage(
+                sender = "system",
+                content = "user '$targetNickname' not found in current geohash",
+                timestamp = java.util.Date(),
+                isRelay = false
+            )
+            messageManager.addMessage(systemMessage)
+        }
+    }
+    
+    /**
+     * Check if a user is blocked in geohash channels
+     */
+    private fun isGeohashUserBlocked(pubkeyHex: String): Boolean {
+        return dataManager.isGeohashUserBlocked(pubkeyHex)
     }
 
 }
