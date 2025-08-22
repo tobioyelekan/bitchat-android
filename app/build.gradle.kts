@@ -92,6 +92,12 @@ dependencies {
     // Bluetooth
     implementation(libs.nordic.ble)
 
+    // WebSocket
+    implementation(libs.okhttp)
+
+    // Google Play Services Location
+    implementation(libs.gms.location)
+
     // Security preferences
     implementation(libs.androidx.security.crypto)
     
