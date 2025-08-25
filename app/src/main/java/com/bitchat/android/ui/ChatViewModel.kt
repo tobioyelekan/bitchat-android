@@ -152,6 +152,12 @@ class ChatViewModel(
         
         // Initialize Nostr integration
         nostrGeohashService.initializeNostrIntegration()
+
+        // Ensure NostrTransport knows our mesh peer ID for embedded packets
+        try {
+            val nostrTransport = com.bitchat.android.nostr.NostrTransport.getInstance(getApplication())
+            nostrTransport.senderPeerID = meshService.myPeerID
+        } catch (_: Exception) { }
         
         // Note: Mesh service is now started by MainActivity
         
@@ -207,6 +213,17 @@ class ChatViewModel(
             setCurrentPrivateChatPeer(peerID)
             // Clear notifications for this sender since user is now viewing the chat
             clearNotificationsForSender(peerID)
+
+            // Persistently mark all messages in this conversation as read so Nostr fetches
+            // after app restarts won't re-mark them as unread.
+            try {
+                val seen = com.bitchat.android.services.SeenMessageStore.getInstance(getApplication())
+                val chats = state.getPrivateChatsValue()
+                val messages = chats[peerID] ?: emptyList()
+                messages.forEach { msg ->
+                    try { seen.markRead(msg.id) } catch (_: Exception) { }
+                }
+            } catch (_: Exception) { }
         }
     }
     
@@ -235,10 +252,23 @@ class ChatViewModel(
         // REMOVED: Auto-join mentioned channels feature that was incorrectly parsing hashtags from @mentions
         // This was causing messages like "test @jack#1234 test" to auto-join channel "#1234"
         
-        val selectedPeer = state.getSelectedPrivateChatPeerValue()
+        var selectedPeer = state.getSelectedPrivateChatPeerValue()
         val currentChannelValue = state.getCurrentChannelValue()
         
         if (selectedPeer != null) {
+            // If the selected peer is a temporary Nostr alias or a noise-hex identity, resolve to a canonical target
+            selectedPeer = com.bitchat.android.services.ConversationAliasResolver.resolveCanonicalPeerID(
+                selectedPeerID = selectedPeer,
+                connectedPeers = state.getConnectedPeersValue(),
+                meshNoiseKeyForPeer = { pid -> meshService.getPeerInfo(pid)?.noisePublicKey },
+                meshHasPeer = { pid -> meshService.getPeerInfo(pid)?.isConnected == true },
+                nostrPubHexForAlias = { alias -> nostrGeohashService.getNostrKeyMapping()[alias] },
+                findNoiseKeyForNostr = { key -> com.bitchat.android.favorites.FavoritesPersistenceService.shared.findNoiseKey(key) }
+            ).also { canonical ->
+                if (canonical != state.getSelectedPrivateChatPeerValue()) {
+                    privateChatManager.startPrivateChat(canonical, meshService)
+                }
+            }
             // Send private message
             val recipientNickname = meshService.getPeerNicknames()[selectedPeer]
             privateChatManager.sendPrivateMessage(
@@ -248,7 +278,9 @@ class ChatViewModel(
                 state.getNicknameValue(),
                 meshService.myPeerID
             ) { messageContent, peerID, recipientNicknameParam, messageId ->
-                meshService.sendPrivateMessage(messageContent, peerID, recipientNicknameParam, messageId)
+                // Route via MessageRouter (mesh when connected+established, else Nostr)
+                val router = com.bitchat.android.services.MessageRouter.getInstance(getApplication(), meshService)
+                router.sendPrivate(messageContent, peerID, recipientNicknameParam, messageId)
             }
         } else {
             // Check if we're in a location channel
@@ -309,7 +341,44 @@ class ChatViewModel(
     fun toggleFavorite(peerID: String) {
         Log.d("ChatViewModel", "toggleFavorite called for peerID: $peerID")
         privateChatManager.toggleFavorite(peerID)
-        
+
+        // Persist relationship in FavoritesPersistenceService when we have Noise key
+        try {
+            val peerInfo = meshService.getPeerInfo(peerID)
+            val noiseKey = peerInfo?.noisePublicKey
+            val nickname = peerInfo?.nickname ?: (meshService.getPeerNicknames()[peerID] ?: peerID)
+            if (noiseKey != null) {
+                val isNowFavorite = dataManager.favoritePeers.contains(
+                    com.bitchat.android.mesh.PeerFingerprintManager.getInstance().getFingerprintForPeer(peerID) ?: ""
+                )
+                com.bitchat.android.favorites.FavoritesPersistenceService.shared.updateFavoriteStatus(
+                    noisePublicKey = noiseKey,
+                    nickname = nickname,
+                    isFavorite = isNowFavorite
+                )
+
+                // Send favorite notification via mesh or Nostr with our npub if available
+                try {
+                    val myNostr = com.bitchat.android.nostr.NostrIdentityBridge.getCurrentNostrIdentity(getApplication())
+                    val announcementContent = if (isNowFavorite) "[FAVORITED]:${myNostr?.npub ?: ""}" else "[UNFAVORITED]:${myNostr?.npub ?: ""}"
+                    // Prefer mesh if session established, else try Nostr
+                    if (meshService.hasEstablishedSession(peerID)) {
+                        // Reuse existing private message path for notifications
+                        meshService.sendPrivateMessage(
+                            announcementContent,
+                            peerID,
+                            nickname,
+                            java.util.UUID.randomUUID().toString()
+                        )
+                    } else {
+                        val nostrTransport = com.bitchat.android.nostr.NostrTransport.getInstance(getApplication())
+                        nostrTransport.senderPeerID = meshService.myPeerID
+                        nostrTransport.sendFavoriteNotification(peerID, isNowFavorite)
+                    }
+                } catch (_: Exception) { }
+            }
+        } catch (_: Exception) { }
+
         // Log current state after toggle
         logCurrentFavoriteState()
     }
@@ -341,10 +410,20 @@ class ChatViewModel(
         val currentPeers = state.getConnectedPeersValue()
         
         // Update session states
+        val prevStates = state.getPeerSessionStatesValue()
         val sessionStates = currentPeers.associateWith { peerID ->
             meshService.getSessionState(peerID).toString()
         }
         state.setPeerSessionStates(sessionStates)
+        // Detect new established sessions and flush router outbox for them and their noiseHex aliases
+        sessionStates.forEach { (peerID, newState) ->
+            val old = prevStates[peerID]
+            if (old != "established" && newState == "established") {
+                com.bitchat.android.services.MessageRouter
+                    .getInstance(getApplication(), meshService)
+                    .onSessionEstablished(peerID)
+            }
+        }
         // Update fingerprint mappings from centralized manager
         val fingerprints = privateChatManager.getAllPeerFingerprints()
         state.setPeerFingerprints(fingerprints)
