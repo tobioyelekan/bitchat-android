@@ -194,6 +194,97 @@ fun AboutSheet(
                         }
                     }
                 }
+
+                // Network (Tor) section
+                item {
+                    val ctx = LocalContext.current
+                    val torMode = remember { mutableStateOf(com.bitchat.android.net.TorPreferenceManager.get(ctx)) }
+                    val torStatus by com.bitchat.android.net.TorManager.statusFlow.collectAsState()
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "network",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            color = colorScheme.onSurface.copy(alpha = 0.8f)
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            FilterChip(
+                                selected = torMode.value == com.bitchat.android.net.TorMode.OFF,
+                                onClick = {
+                                    torMode.value = com.bitchat.android.net.TorMode.OFF
+                                    com.bitchat.android.net.TorPreferenceManager.set(ctx, torMode.value)
+                                },
+                                label = { Text("tor off", fontFamily = FontFamily.Monospace) }
+                            )
+                            FilterChip(
+                                selected = torMode.value == com.bitchat.android.net.TorMode.ON,
+                                onClick = {
+                                    torMode.value = com.bitchat.android.net.TorMode.ON
+                                    com.bitchat.android.net.TorPreferenceManager.set(ctx, torMode.value)
+                                },
+                                label = { Text("tor on", fontFamily = FontFamily.Monospace) }
+                            )
+                            FilterChip(
+                                selected = torMode.value == com.bitchat.android.net.TorMode.ISOLATION,
+                                onClick = {
+                                    torMode.value = com.bitchat.android.net.TorMode.ISOLATION
+                                    com.bitchat.android.net.TorPreferenceManager.set(ctx, torMode.value)
+                                },
+                                label = { Text("isolation mode", fontFamily = FontFamily.Monospace) }
+                            )
+                            // Status indicator (red/orange/green) shown to the right of buttons
+                            val statusColor = when {
+                                torStatus.running && torStatus.bootstrapPercent < 100 -> Color(0xFFFF9500)
+                                torStatus.running && torStatus.bootstrapPercent >= 100 -> if (isDark) Color(0xFF32D74B) else Color(0xFF248A3D)
+                                else -> Color.Red
+                            }
+                            Surface(
+                                color = statusColor,
+                                shape = RoundedCornerShape(50)
+                            ) { Box(Modifier.size(10.dp)) }
+                        }
+                        Text(
+                            text = "route internet over tor. isolation uses separate circuits per relay.",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+
+                        // Debug status (temporary)
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = colorScheme.surfaceVariant.copy(alpha = 0.25f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "tor status: " +
+                                            (if (torStatus.running) "running" else "stopped") +
+                                            ", bootstrap=" + torStatus.bootstrapPercent + "%",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = colorScheme.onSurface.copy(alpha = 0.75f)
+                                )
+                                val last = torStatus.lastLogLine
+                                if (last.isNotEmpty()) {
+                                    Text(
+                                        text = "last: " + last.take(160),
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = colorScheme.onSurface.copy(alpha = 0.6f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 
                 // Emergency warning
                 item {
