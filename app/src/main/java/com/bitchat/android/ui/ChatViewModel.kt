@@ -26,6 +26,7 @@ class ChatViewModel(
     application: Application,
     val meshService: BluetoothMeshService
 ) : AndroidViewModel(application), BluetoothMeshDelegate {
+    private val debugManager by lazy { try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (e: Exception) { null } }
 
     companion object {
         private const val TAG = "ChatViewModel"
@@ -150,6 +151,22 @@ class ChatViewModel(
         
         // Initialize session state monitoring
         initializeSessionStateMonitoring()
+
+        // Bridge DebugSettingsManager -> Chat messages when verbose logging is on
+        viewModelScope.launch {
+            com.bitchat.android.ui.debug.DebugSettingsManager.getInstance().debugMessages.collect { msgs ->
+                if (com.bitchat.android.ui.debug.DebugSettingsManager.getInstance().verboseLoggingEnabled.value) {
+                    // Only show debug logs in the Mesh chat timeline to avoid leaking into geohash chats
+                    val selectedLocation = state.selectedLocationChannel.value
+                    if (selectedLocation is com.bitchat.android.geohash.ChannelID.Mesh) {
+                        // Append only latest debug message as system message to avoid flooding
+                        msgs.lastOrNull()?.let { dm ->
+                            messageManager.addSystemMessage(dm.content)
+                        }
+                    }
+                }
+            }
+        }
         
         // Initialize location channel state
         nostrGeohashService.initializeLocationChannelState()
@@ -618,6 +635,13 @@ class ChatViewModel(
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error clearing cryptographic data: ${e.message}")
         }
+    }
+
+    /**
+     * Get messages for a specific geohash timeline
+     */
+    fun getGeohashMessages(geohash: String): List<BitchatMessage> {
+        return nostrGeohashService.getGeohashMessages(geohash)
     }
 
     /**
