@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
  */
 @Composable
 fun PermissionExplanationScreen(
+    modifier: Modifier,
     permissionCategories: List<PermissionCategory>,
     onContinue: () -> Unit
 ) {
@@ -27,7 +28,7 @@ fun PermissionExplanationScreen(
     val scrollState = rememberScrollState()
 
     Box(
-        modifier = Modifier.fillMaxSize()
+        modifier = modifier
     ) {
         // Scrollable content
         Column(
@@ -45,7 +46,7 @@ fun PermissionExplanationScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Welcome to bitchat*",
+                    text = "Welcome to bitchat",
                     style = MaterialTheme.typography.headlineMedium.copy(
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -100,8 +101,8 @@ fun PermissionExplanationScreen(
                     
                     Text(
                         text = "• bitchat doesn't track you or collect personal data\n" +
-                                "• No servers, no internet required, no data logging\n" +
-                                "• Location permission is only used by Android for Bluetooth scanning\n" +
+                                "• Bluetooth mesh chats are fully offline and require no internet\n" +
+                                "• Geohash chats use the internet but your location is generalized\n" +
                                 "• Your messages stay on your device and peer devices only",
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace,
@@ -219,7 +220,7 @@ private fun PermissionCategoryCard(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = "bitchat does NOT use GPS or track location",
+                        text = "bitchat does NOT track your location",
                         style = MaterialTheme.typography.bodySmall.copy(
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Medium,

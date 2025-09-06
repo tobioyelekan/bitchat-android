@@ -88,6 +88,7 @@ class BluetoothConnectionTracker(
      * Add a device connection
      */
     fun addDeviceConnection(deviceAddress: String, deviceConn: DeviceConnection) {
+        Log.d(TAG, "Tracker: Adding device connection for $deviceAddress (isClient: ${deviceConn.isClient}")
         connectedDevices[deviceAddress] = deviceConn
         pendingConnections.remove(deviceAddress)
     }
@@ -180,20 +181,37 @@ class BluetoothConnectionTracker(
      * Add a pending connection attempt
      */
     fun addPendingConnection(deviceAddress: String): Boolean {
+        Log.d(TAG, "Tracker: Adding pending connection for $deviceAddress")
         synchronized(pendingConnections) {
             // Double-check inside synchronized block
             val currentAttempt = pendingConnections[deviceAddress]
             if (currentAttempt != null && !currentAttempt.isExpired() && !currentAttempt.shouldRetry()) {
+                Log.d(TAG, "Tracker: Connection attempt already in progress for $deviceAddress")
                 return false
+            }
+            if (currentAttempt != null) {
+                Log.d(TAG, "Tracker: current attempt: $currentAttempt")
             }
             
             // Update connection attempt atomically
             val attempts = (currentAttempt?.attempts ?: 0) + 1
             pendingConnections[deviceAddress] = ConnectionAttempt(attempts)
+            Log.d(TAG, "Tracker: Added pending connection for $deviceAddress (attempts: $attempts)")
             return true
         }
     }
     
+    /**
+     * Disconnect a specific device (by MAC address)
+     */
+    fun disconnectDevice(deviceAddress: String) {
+        connectedDevices[deviceAddress]?.gatt?.let {
+            try { it.disconnect() } catch (_: Exception) { }
+        }
+        cleanupDeviceConnection(deviceAddress)
+        Log.d(TAG, "Requested disconnect for $deviceAddress")
+    }
+
     /**
      * Remove a pending connection
      */
@@ -217,19 +235,38 @@ class BluetoothConnectionTracker(
      * Enforce connection limits by disconnecting oldest connections
      */
     fun enforceConnectionLimits() {
-        val maxConnections = powerManager.getMaxConnections()
-        if (connectedDevices.size > maxConnections) {
-            Log.i(TAG, "Enforcing connection limit: ${connectedDevices.size} > $maxConnections")
-            
-            // Disconnect oldest client connections first
-            val sortedConnections = connectedDevices.values
-                .filter { it.isClient }
+        // Read debug overrides if available
+        val dbg = try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (_: Exception) { null }
+        val maxOverall = dbg?.maxConnectionsOverall?.value ?: powerManager.getMaxConnections()
+        val maxClient = dbg?.maxClientConnections?.value ?: maxOverall
+        val maxServer = dbg?.maxServerConnections?.value ?: maxOverall
+
+        val clients = connectedDevices.values.filter { it.isClient }
+        val servers = connectedDevices.values.filter { !it.isClient }
+
+        // Enforce client cap first (we can actively disconnect)
+        if (clients.size > maxClient) {
+            Log.i(TAG, "Enforcing client cap: ${clients.size} > $maxClient")
+            val toDisconnect = clients.sortedBy { it.connectedAt }.take(clients.size - maxClient)
+            toDisconnect.forEach { dc ->
+                Log.d(TAG, "Disconnecting client ${dc.device.address} due to client cap")
+                dc.gatt?.disconnect()
+            }
+        }
+
+        // Note: server cap enforced in GattServerManager (we don't have server handle here)
+
+        // Enforce overall cap by disconnecting oldest client connections
+        if (connectedDevices.size > maxOverall) {
+            Log.i(TAG, "Enforcing overall cap: ${connectedDevices.size} > $maxOverall")
+            val excess = connectedDevices.size - maxOverall
+            val toDisconnect = connectedDevices.values
+                .filter { it.isClient } // only clients from here
                 .sortedBy { it.connectedAt }
-            
-            val toDisconnect = sortedConnections.take(connectedDevices.size - maxConnections)
-            toDisconnect.forEach { deviceConn ->
-                Log.d(TAG, "Disconnecting ${deviceConn.device.address} due to connection limit")
-                deviceConn.gatt?.disconnect()
+                .take(excess)
+            toDisconnect.forEach { dc ->
+                Log.d(TAG, "Disconnecting client ${dc.device.address} due to overall cap")
+                dc.gatt?.disconnect()
             }
         }
     }
@@ -240,10 +277,7 @@ class BluetoothConnectionTracker(
     fun cleanupDeviceConnection(deviceAddress: String) {
         connectedDevices.remove(deviceAddress)?.let { deviceConn ->
             subscribedDevices.removeAll { it.address == deviceAddress }
-            addressPeerMap.remove(deviceAddress)
         }
-        // CRITICAL FIX: Always remove from pending connections when cleaning up
-        // This prevents failed connections from blocking future attempts
         pendingConnections.remove(deviceAddress)
         Log.d(TAG, "Cleaned up device connection for $deviceAddress")
     }
@@ -318,7 +352,7 @@ class BluetoothConnectionTracker(
             appendLine("Connected Devices: ${connectedDevices.size} / ${powerManager.getMaxConnections()}")
             connectedDevices.forEach { (address, deviceConn) ->
                 val age = (System.currentTimeMillis() - deviceConn.connectedAt) / 1000
-                appendLine("  - $address (${if (deviceConn.isClient) "client" else "server"}, ${age}s, RSSI: ${deviceConn.rssi})")
+                appendLine("  - $address (we're ${if (deviceConn.isClient) "client" else "server"}, ${age}s, RSSI: ${deviceConn.rssi})")
             }
             appendLine()
             appendLine("Subscribed Devices (server mode): ${subscribedDevices.size}")

@@ -79,15 +79,58 @@ class ChatState {
     private val _commandSuggestions = MutableLiveData<List<CommandSuggestion>>(emptyList())
     val commandSuggestions: LiveData<List<CommandSuggestion>> = _commandSuggestions
     
+    // Mention autocomplete
+    private val _showMentionSuggestions = MutableLiveData(false)
+    val showMentionSuggestions: LiveData<Boolean> = _showMentionSuggestions
+    
+    private val _mentionSuggestions = MutableLiveData<List<String>>(emptyList())
+    val mentionSuggestions: LiveData<List<String>> = _mentionSuggestions
+    
     // Favorites
     private val _favoritePeers = MutableLiveData<Set<String>>(emptySet())
     val favoritePeers: LiveData<Set<String>> = _favoritePeers
     
-    val peerIDToPublicKeyFingerprint = mutableMapOf<String, String>()
+    // Noise session states for peers (for reactive UI updates)
+    private val _peerSessionStates = MutableLiveData<Map<String, String>>(emptyMap())
+    val peerSessionStates: LiveData<Map<String, String>> = _peerSessionStates
+    
+    // Peer fingerprint state for reactive favorites (for reactive UI updates)
+    private val _peerFingerprints = MutableLiveData<Map<String, String>>(emptyMap())
+    val peerFingerprints: LiveData<Map<String, String>> = _peerFingerprints
+
+    private val _peerNicknames = MutableLiveData<Map<String, String>>(emptyMap())
+    val peerNicknames: LiveData<Map<String, String>> = _peerNicknames
+
+    private val _peerRSSI = MutableLiveData<Map<String, Int>>(emptyMap())
+    val peerRSSI: LiveData<Map<String, Int>> = _peerRSSI
+
+    // Direct connection status per peer (for live UI updates)
+    private val _peerDirect = MutableLiveData<Map<String, Boolean>>(emptyMap())
+    val peerDirect: LiveData<Map<String, Boolean>> = _peerDirect
+    
+    // peerIDToPublicKeyFingerprint REMOVED - fingerprints now handled centrally in PeerManager
     
     // Navigation state
     private val _showAppInfo = MutableLiveData<Boolean>(false)
     val showAppInfo: LiveData<Boolean> = _showAppInfo
+    
+    // Location channels state (for Nostr geohash features)
+    private val _selectedLocationChannel = MutableLiveData<com.bitchat.android.geohash.ChannelID?>(com.bitchat.android.geohash.ChannelID.Mesh)
+    val selectedLocationChannel: LiveData<com.bitchat.android.geohash.ChannelID?> = _selectedLocationChannel
+    
+    private val _isTeleported = MutableLiveData<Boolean>(false)
+    val isTeleported: LiveData<Boolean> = _isTeleported
+    
+    // Geohash people state (iOS-compatible)
+    private val _geohashPeople = MutableLiveData<List<GeoPerson>>(emptyList())
+    val geohashPeople: LiveData<List<GeoPerson>> = _geohashPeople
+    
+    private val _teleportedGeo = MutableLiveData<Set<String>>(emptySet())
+    val teleportedGeo: LiveData<Set<String>> = _teleportedGeo
+    
+    // Geohash participant counts reactive state (for real-time location channel counts)
+    private val _geohashParticipantCounts = MutableLiveData<Map<String, Int>>(emptyMap())
+    val geohashParticipantCounts: LiveData<Map<String, Int>> = _geohashParticipantCounts
     
     // Unread state computed properties
     val hasUnreadChannels: MediatorLiveData<Boolean> = MediatorLiveData<Boolean>()
@@ -121,8 +164,15 @@ class ChatState {
     fun getShowSidebarValue() = _showSidebar.value ?: false
     fun getShowCommandSuggestionsValue() = _showCommandSuggestions.value ?: false
     fun getCommandSuggestionsValue() = _commandSuggestions.value ?: emptyList()
+    fun getShowMentionSuggestionsValue() = _showMentionSuggestions.value ?: false
+    fun getMentionSuggestionsValue() = _mentionSuggestions.value ?: emptyList()
     fun getFavoritePeersValue() = _favoritePeers.value ?: emptySet()
+    fun getPeerSessionStatesValue() = _peerSessionStates.value ?: emptyMap()
+    fun getPeerFingerprintsValue() = _peerFingerprints.value ?: emptyMap()
     fun getShowAppInfoValue() = _showAppInfo.value ?: false
+    fun getGeohashPeopleValue() = _geohashPeople.value ?: emptyList()
+    fun getTeleportedGeoValue() = _teleportedGeo.value ?: emptySet()
+    fun getGeohashParticipantCountsValue() = _geohashParticipantCounts.value ?: emptyMap()
     
     // Setters for state updates
     fun setMessages(messages: List<BitchatMessage>) {
@@ -192,6 +242,14 @@ class ChatState {
     fun setCommandSuggestions(suggestions: List<CommandSuggestion>) {
         _commandSuggestions.value = suggestions
     }
+    
+    fun setShowMentionSuggestions(show: Boolean) {
+        _showMentionSuggestions.value = show
+    }
+    
+    fun setMentionSuggestions(suggestions: List<String>) {
+        _mentionSuggestions.value = suggestions
+    }
 
     fun setFavoritePeers(favorites: Set<String>) {
         val currentValue = _favoritePeers.value ?: emptySet()
@@ -207,8 +265,48 @@ class ChatState {
         Log.d("ChatState", "LiveData has active observers: ${_favoritePeers.hasActiveObservers()}")
     }
     
+    fun setPeerSessionStates(states: Map<String, String>) {
+        _peerSessionStates.value = states
+    }
+    
+    fun setPeerFingerprints(fingerprints: Map<String, String>) {
+        _peerFingerprints.value = fingerprints
+    }
+
+    fun setPeerNicknames(nicknames: Map<String, String>) {
+        _peerNicknames.value = nicknames
+    }
+
+    fun setPeerRSSI(rssi: Map<String, Int>) {
+        _peerRSSI.value = rssi
+    }
+
+    fun setPeerDirect(direct: Map<String, Boolean>) {
+        _peerDirect.value = direct
+    }
+    
     fun setShowAppInfo(show: Boolean) {
         _showAppInfo.value = show
+    }
+    
+    fun setSelectedLocationChannel(channel: com.bitchat.android.geohash.ChannelID?) {
+        _selectedLocationChannel.value = channel
+    }
+    
+    fun setIsTeleported(teleported: Boolean) {
+        _isTeleported.value = teleported
+    }
+    
+    fun setGeohashPeople(people: List<GeoPerson>) {
+        _geohashPeople.value = people
+    }
+    
+    fun setTeleportedGeo(teleported: Set<String>) {
+        _teleportedGeo.value = teleported
+    }
+    
+    fun setGeohashParticipantCounts(counts: Map<String, Int>) {
+        _geohashParticipantCounts.value = counts
     }
 
 }

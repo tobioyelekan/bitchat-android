@@ -5,6 +5,7 @@ import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
 import com.bitchat.android.model.RoutedPacket
+import com.bitchat.android.util.toHexString
 import kotlinx.coroutines.*
 import java.util.*
 import kotlin.collections.mutableSetOf
@@ -40,7 +41,7 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
     }
     
     /**
-     * Validate packet security (timestamp, replay attacks, duplicates)
+     * Validate packet security (timestamp, replay attacks, duplicates, signatures)
      */
     fun validatePacket(packet: BitchatPacket, peerID: String): Boolean {
         // Skip validation for our own packets
@@ -82,51 +83,73 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
         processedMessages.add(messageID)
         messageTimestamps[messageID] = currentTime
         
+        // NEW: Signature verification logging (not rejecting yet)
+        verifyPacketSignatureWithLogging(packet, peerID)
+        
         Log.d(TAG, "Packet validation passed for $peerID, messageID: $messageID")
         return true
     }
     
     /**
-     * Handle key exchange packet
+     * Handle Noise handshake packet - SIMPLIFIED iOS-compatible version
+     * Single handshake type with automatic response handling
      */
-    suspend fun handleKeyExchange(routed: RoutedPacket): Boolean {
+    suspend fun handleNoiseHandshake(routed: RoutedPacket): Boolean {
         val packet = routed.packet
         val peerID = routed.peerID ?: "unknown"
 
+        // Skip handshakes not addressed to us
+        if (packet.recipientID?.toHexString() != myPeerID) {
+            Log.d(TAG, "Skipping handshake not addressed to us: $peerID")
+            return false
+        }
+            
+        // Skip our own handshake messages
         if (peerID == myPeerID) return false
+
+        if (encryptionService.hasEstablishedSession(peerID)) {
+            Log.d(TAG, "Handshake already completed with $peerID")
+            return true
+        }
         
         if (packet.payload.isEmpty()) {
-            Log.w(TAG, "Key exchange packet has empty payload")
+            Log.w(TAG, "Noise handshake packet has empty payload")
             return false
         }
         
-        // Prevent duplicate key exchange processing
+        // Prevent duplicate handshake processing
         val exchangeKey = "$peerID-${packet.payload.sliceArray(0 until minOf(16, packet.payload.size)).contentHashCode()}"
         
         if (processedKeyExchanges.contains(exchangeKey)) {
-            Log.d(TAG, "Already processed key exchange: $exchangeKey")
+            Log.d(TAG, "Already processed handshake: $exchangeKey")
             return false
         }
-        
+        Log.d(TAG, "Processing Noise handshake from $peerID (${packet.payload.size} bytes)")
         processedKeyExchanges.add(exchangeKey)
         
         try {
-            // Process the key exchange
-            encryptionService.addPeerPublicKey(peerID, packet.payload)
+            // Process the Noise handshake through the updated EncryptionService
+            val response = encryptionService.processHandshakeMessage(packet.payload, peerID)
             
-            Log.d(TAG, "Successfully processed key exchange from $peerID")
-            
-            // Notify delegate
-            delegate?.onKeyExchangeCompleted(peerID, packet.payload, routed.relayAddress)
-            
+            if (response != null) {
+                Log.d(TAG, "Successfully processed Noise handshake from $peerID, sending response")
+                // Send handshake response through delegate
+                delegate?.sendHandshakeResponse(peerID, response)
+            }
+            // Check if session is now established (handshake complete)
+            if (encryptionService.hasEstablishedSession(peerID)) {
+                Log.d(TAG, "✅ Noise handshake completed with $peerID")
+                delegate?.onKeyExchangeCompleted(peerID, packet.payload)
+            }
             return true
+
             
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to process key exchange from $peerID: ${e.message}")
+            Log.e(TAG, "Failed to process Noise handshake from $peerID: ${e.message}")
             return false
         }
     }
-    
+
     /**
      * Verify packet signature
      */
@@ -193,7 +216,7 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
      */
     private fun generateMessageID(packet: BitchatPacket, peerID: String): String {
         return when (MessageType.fromValue(packet.type)) {
-            MessageType.FRAGMENT_START, MessageType.FRAGMENT_CONTINUE, MessageType.FRAGMENT_END -> {
+            MessageType.FRAGMENT -> {
                 // For fragments, include the payload hash to distinguish different fragments
                 "${packet.timestamp}-$peerID-${packet.type}-${packet.payload.contentHashCode()}"
             }
@@ -206,12 +229,56 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
     }
     
     /**
+     * Verify packet signature using peer's signing public key and log the result
+     */
+    private fun verifyPacketSignatureWithLogging(packet: BitchatPacket, peerID: String) {
+        try {
+            // Check if packet has a signature
+            if (packet.signature == null) {
+                Log.d(TAG, "📝 Signature check for $peerID: NO_SIGNATURE (packet type ${packet.type})")
+                return
+            }
+            
+            // Try to get peer's signing public key from peer info
+            val peerInfo = delegate?.getPeerInfo(peerID)
+            val signingPublicKey = peerInfo?.signingPublicKey
+            
+            if (signingPublicKey == null) {
+                Log.d(TAG, "📝 Signature check for $peerID: NO_SIGNING_KEY (packet type ${packet.type})")
+                return
+            }
+            
+            // Get the canonical packet data for signature verification (without signature)
+            val packetDataForSigning = packet.toBinaryDataForSigning()
+            if (packetDataForSigning == null) {
+                Log.w(TAG, "📝 Signature check for $peerID: ENCODING_ERROR (packet type ${packet.type})")
+                return
+            }
+            
+            // Verify the signature using the peer's signing public key
+            val signature = packet.signature!! // We already checked for null above
+            val isSignatureValid = encryptionService.verifyEd25519Signature(
+                signature,
+                packetDataForSigning,
+                signingPublicKey
+            )
+            
+            if (isSignatureValid) {
+                Log.d(TAG, "📝 Signature check for $peerID: ✅ VALID (packet type ${packet.type})")
+            } else {
+                Log.w(TAG, "📝 Signature check for $peerID: ❌ INVALID (packet type ${packet.type})")
+            }
+            
+        } catch (e: Exception) {
+            Log.w(TAG, "📝 Signature check for $peerID: ERROR - ${e.message} (packet type ${packet.type})")
+        }
+    }
+    
+    /**
      * Check if we have encryption keys for a peer
      */
     fun hasKeysForPeer(peerID: String): Boolean {
-        // This would need to be implemented in EncryptionService
-        // For now, we'll assume we have keys if we processed a key exchange
-        return processedKeyExchanges.any { it.startsWith("$peerID-") }
+        return encryptionService.hasEstablishedSession(peerID)
     }
     
     /**
@@ -319,5 +386,7 @@ class SecurityManager(private val encryptionService: EncryptionService, private 
  * Delegate interface for security manager callbacks
  */
 interface SecurityManagerDelegate {
-    fun onKeyExchangeCompleted(peerID: String, peerPublicKeyData: ByteArray, receivedAddress: String?)
+    fun onKeyExchangeCompleted(peerID: String, peerPublicKeyData: ByteArray)
+    fun sendHandshakeResponse(peerID: String, response: ByteArray)
+    fun getPeerInfo(peerID: String): PeerInfo? // NEW: For signature verification
 }

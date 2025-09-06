@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun LocationCheckScreen(
+    modifier: Modifier,
     status: LocationStatus,
     onEnableLocation: () -> Unit,
     onRetry: () -> Unit,
@@ -29,9 +30,7 @@ fun LocationCheckScreen(
     val colorScheme = MaterialTheme.colorScheme
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
+        modifier = modifier.padding(32.dp),
         contentAlignment = Alignment.Center
     ) {
         when (status) {
@@ -119,7 +118,7 @@ private fun LocationDisabledContent(
                 }
                 
                 Text(
-                    text = "bitchat does NOT track your location or use GPS.\n\nLocation services are required by Android for Bluetooth scanning to work properly. This is an Android system requirement.",
+                    text = "bitchat does NOT track your location.\n\nLocation services are required for Bluetooth scanning and for the Geohash chat feature.",
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace,
                         color = colorScheme.onSurface.copy(alpha = 0.8f)
@@ -139,10 +138,10 @@ private fun LocationDisabledContent(
                 )
                 
                 Text(
-                    text = "• Bluetooth device scanning (Android requirement)\n" +
+                    text = "• Bluetooth device scanning\n" +
                             "• Discovering nearby users on mesh network\n" +
-                            "• Creating connections without internet\n" +
-                            "• No GPS tracking or location collection",
+                            "• Geohash chat feature\n" +
+                            "• No tracking or location collection",
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontFamily = FontFamily.Monospace,
                         color = colorScheme.onSurface.copy(alpha = 0.8f)
@@ -247,7 +246,7 @@ private fun LocationCheckingContent(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "bitchat*",
+            text = "bitchat",
             style = MaterialTheme.typography.headlineLarge.copy(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,

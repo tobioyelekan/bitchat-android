@@ -1,6 +1,7 @@
 package com.bitchat.android.model
 
 import android.os.Parcelable
+import com.google.gson.GsonBuilder
 import kotlinx.parcelize.Parcelize
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -12,22 +13,22 @@ import java.util.*
 sealed class DeliveryStatus : Parcelable {
     @Parcelize
     object Sending : DeliveryStatus()
-    
+
     @Parcelize
     object Sent : DeliveryStatus()
-    
+
     @Parcelize
     data class Delivered(val to: String, val at: Date) : DeliveryStatus()
-    
+
     @Parcelize
     data class Read(val by: String, val at: Date) : DeliveryStatus()
-    
+
     @Parcelize
     data class Failed(val reason: String) : DeliveryStatus()
-    
+
     @Parcelize
     data class PartiallyDelivered(val reached: Int, val total: Int) : DeliveryStatus()
-    
+
     fun getDisplayText(): String {
         return when (this) {
             is Sending -> "Sending..."
@@ -45,7 +46,7 @@ sealed class DeliveryStatus : Parcelable {
  */
 @Parcelize
 data class BitchatMessage(
-    val id: String = UUID.randomUUID().toString(),
+    val id: String = UUID.randomUUID().toString().uppercase(),
     val sender: String,
     val content: String,
     val timestamp: Date,
@@ -58,7 +59,8 @@ data class BitchatMessage(
     val channel: String? = null,
     val encryptedContent: ByteArray? = null,
     val isEncrypted: Boolean = false,
-    val deliveryStatus: DeliveryStatus? = null
+    val deliveryStatus: DeliveryStatus? = null,
+    val powDifficulty: Int? = null
 ) : Parcelable {
 
     /**
@@ -67,7 +69,7 @@ data class BitchatMessage(
     fun toBinaryPayload(): ByteArray? {
         try {
             val buffer = ByteBuffer.allocate(4096).apply { order(ByteOrder.BIG_ENDIAN) }
-            
+
             // Message format:
             // - Flags: 1 byte (bit flags for optional fields)
             // - Timestamp: 8 bytes (milliseconds since epoch, big-endian)
@@ -75,7 +77,7 @@ data class BitchatMessage(
             // - Sender length: 1 byte + sender data
             // - Content length: 2 bytes + content data (or encrypted content)
             // Optional fields based on flags...
-            
+
             var flags: UByte = 0u
             if (isRelay) flags = flags or 0x01u
             if (isPrivate) flags = flags or 0x02u
@@ -85,23 +87,23 @@ data class BitchatMessage(
             if (mentions != null && mentions.isNotEmpty()) flags = flags or 0x20u
             if (channel != null) flags = flags or 0x40u
             if (isEncrypted) flags = flags or 0x80u
-            
+
             buffer.put(flags.toByte())
-            
+
             // Timestamp (in milliseconds, 8 bytes big-endian)
             val timestampMillis = timestamp.time
             buffer.putLong(timestampMillis)
-            
+
             // ID
             val idBytes = id.toByteArray(Charsets.UTF_8)
             buffer.put(minOf(idBytes.size, 255).toByte())
             buffer.put(idBytes.take(255).toByteArray())
-            
+
             // Sender
             val senderBytes = sender.toByteArray(Charsets.UTF_8)
             buffer.put(minOf(senderBytes.size, 255).toByte())
             buffer.put(senderBytes.take(255).toByteArray())
-            
+
             // Content or encrypted content
             if (isEncrypted && encryptedContent != null) {
                 val length = minOf(encryptedContent.size, 65535)
@@ -113,26 +115,26 @@ data class BitchatMessage(
                 buffer.putShort(length.toShort())
                 buffer.put(contentBytes.take(length).toByteArray())
             }
-            
+
             // Optional fields
             originalSender?.let { origSender ->
                 val origBytes = origSender.toByteArray(Charsets.UTF_8)
                 buffer.put(minOf(origBytes.size, 255).toByte())
                 buffer.put(origBytes.take(255).toByteArray())
             }
-            
+
             recipientNickname?.let { recipient ->
                 val recipBytes = recipient.toByteArray(Charsets.UTF_8)
                 buffer.put(minOf(recipBytes.size, 255).toByte())
                 buffer.put(recipBytes.take(255).toByteArray())
             }
-            
+
             senderPeerID?.let { peerID ->
                 val peerBytes = peerID.toByteArray(Charsets.UTF_8)
                 buffer.put(minOf(peerBytes.size, 255).toByte())
                 buffer.put(peerBytes.take(255).toByteArray())
             }
-            
+
             // Mentions array
             mentions?.let { mentionList ->
                 buffer.put(minOf(mentionList.size, 255).toByte())
@@ -142,24 +144,24 @@ data class BitchatMessage(
                     buffer.put(mentionBytes.take(255).toByteArray())
                 }
             }
-            
+
             // Channel hashtag
             channel?.let { channelName ->
                 val channelBytes = channelName.toByteArray(Charsets.UTF_8)
                 buffer.put(minOf(channelBytes.size, 255).toByte())
                 buffer.put(channelBytes.take(255).toByteArray())
             }
-            
+
             val result = ByteArray(buffer.position())
             buffer.rewind()
             buffer.get(result)
             return result
-            
+
         } catch (e: Exception) {
             return null
         }
     }
-    
+
     companion object {
         /**
          * Parse message from binary payload - exactly same logic as iOS version
@@ -167,9 +169,9 @@ data class BitchatMessage(
         fun fromBinaryPayload(data: ByteArray): BitchatMessage? {
             try {
                 if (data.size < 13) return null
-                
+
                 val buffer = ByteBuffer.wrap(data).apply { order(ByteOrder.BIG_ENDIAN) }
-                
+
                 // Flags
                 val flags = buffer.get().toUByte()
                 val isRelay = (flags and 0x01u) != 0u.toUByte()
@@ -180,32 +182,32 @@ data class BitchatMessage(
                 val hasMentions = (flags and 0x20u) != 0u.toUByte()
                 val hasChannel = (flags and 0x40u) != 0u.toUByte()
                 val isEncrypted = (flags and 0x80u) != 0u.toUByte()
-                
+
                 // Timestamp
                 val timestampMillis = buffer.getLong()
                 val timestamp = Date(timestampMillis)
-                
+
                 // ID
                 val idLength = buffer.get().toInt() and 0xFF
                 if (buffer.remaining() < idLength) return null
                 val idBytes = ByteArray(idLength)
                 buffer.get(idBytes)
                 val id = String(idBytes, Charsets.UTF_8)
-                
+
                 // Sender
                 val senderLength = buffer.get().toInt() and 0xFF
                 if (buffer.remaining() < senderLength) return null
                 val senderBytes = ByteArray(senderLength)
                 buffer.get(senderBytes)
                 val sender = String(senderBytes, Charsets.UTF_8)
-                
+
                 // Content
                 val contentLength = buffer.getShort().toInt() and 0xFFFF
                 if (buffer.remaining() < contentLength) return null
-                
+
                 val content: String
                 val encryptedContent: ByteArray?
-                
+
                 if (isEncrypted) {
                     val encryptedBytes = ByteArray(contentLength)
                     buffer.get(encryptedBytes)
@@ -217,7 +219,7 @@ data class BitchatMessage(
                     content = String(contentBytes, Charsets.UTF_8)
                     encryptedContent = null
                 }
-                
+
                 // Optional fields
                 val originalSender = if (hasOriginalSender && buffer.hasRemaining()) {
                     val length = buffer.get().toInt() and 0xFF
@@ -227,7 +229,7 @@ data class BitchatMessage(
                         String(bytes, Charsets.UTF_8)
                     } else null
                 } else null
-                
+
                 val recipientNickname = if (hasRecipientNickname && buffer.hasRemaining()) {
                     val length = buffer.get().toInt() and 0xFF
                     if (buffer.remaining() >= length) {
@@ -236,7 +238,7 @@ data class BitchatMessage(
                         String(bytes, Charsets.UTF_8)
                     } else null
                 } else null
-                
+
                 val senderPeerID = if (hasSenderPeerID && buffer.hasRemaining()) {
                     val length = buffer.get().toInt() and 0xFF
                     if (buffer.remaining() >= length) {
@@ -245,7 +247,7 @@ data class BitchatMessage(
                         String(bytes, Charsets.UTF_8)
                     } else null
                 } else null
-                
+
                 // Mentions array
                 val mentions = if (hasMentions && buffer.hasRemaining()) {
                     val mentionCount = buffer.get().toInt() and 0xFF
@@ -262,7 +264,7 @@ data class BitchatMessage(
                     }
                     if (mentionList.isNotEmpty()) mentionList else null
                 } else null
-                
+
                 // Channel
                 val channel = if (hasChannel && buffer.hasRemaining()) {
                     val length = buffer.get().toInt() and 0xFF
@@ -272,7 +274,7 @@ data class BitchatMessage(
                         String(bytes, Charsets.UTF_8)
                     } else null
                 } else null
-                
+
                 return BitchatMessage(
                     id = id,
                     sender = sender,
@@ -288,19 +290,19 @@ data class BitchatMessage(
                     encryptedContent = encryptedContent,
                     isEncrypted = isEncrypted
                 )
-                
+
             } catch (e: Exception) {
                 return null
             }
         }
     }
-    
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
-        
+
         other as BitchatMessage
-        
+
         if (id != other.id) return false
         if (sender != other.sender) return false
         if (content != other.content) return false
@@ -318,10 +320,10 @@ data class BitchatMessage(
         } else if (other.encryptedContent != null) return false
         if (isEncrypted != other.isEncrypted) return false
         if (deliveryStatus != other.deliveryStatus) return false
-        
+
         return true
     }
-    
+
     override fun hashCode(): Int {
         var result = id.hashCode()
         result = 31 * result + sender.hashCode()
@@ -341,67 +343,4 @@ data class BitchatMessage(
     }
 }
 
-/**
- * Delivery acknowledgment structure - exact same as iOS version
- */
-@Parcelize
-data class DeliveryAck(
-    val originalMessageID: String,
-    val ackID: String = UUID.randomUUID().toString(),
-    val recipientID: String,
-    val recipientNickname: String,
-    val timestamp: Date = Date(),
-    val hopCount: UByte
-) : Parcelable {
-    
-    fun encode(): ByteArray? {
-        return try {
-            com.google.gson.Gson().toJson(this).toByteArray(Charsets.UTF_8)
-        } catch (e: Exception) {
-            null
-        }
-    }
-    
-    companion object {
-        fun decode(data: ByteArray): DeliveryAck? {
-            return try {
-                val json = String(data, Charsets.UTF_8)
-                com.google.gson.Gson().fromJson(json, DeliveryAck::class.java)
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
-}
 
-/**
- * Read receipt structure - exact same as iOS version
- */
-@Parcelize
-data class ReadReceipt(
-    val originalMessageID: String,
-    val receiptID: String = UUID.randomUUID().toString(),
-    val readerID: String,
-    val readerNickname: String,
-    val timestamp: Date = Date()
-) : Parcelable {
-    
-    fun encode(): ByteArray? {
-        return try {
-            com.google.gson.Gson().toJson(this).toByteArray(Charsets.UTF_8)
-        } catch (e: Exception) {
-            null
-        }
-    }
-    
-    companion object {
-        fun decode(data: ByteArray): ReadReceipt? {
-            return try {
-                val json = String(data, Charsets.UTF_8)
-                com.google.gson.Gson().fromJson(json, ReadReceipt::class.java)
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
-}

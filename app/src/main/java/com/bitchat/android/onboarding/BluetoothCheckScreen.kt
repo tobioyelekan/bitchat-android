@@ -3,7 +3,6 @@ package com.bitchat.android.onboarding
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,6 +20,7 @@ import androidx.compose.ui.unit.dp
  */
 @Composable
 fun BluetoothCheckScreen(
+    modifier: Modifier,
     status: BluetoothStatus,
     onEnableBluetooth: () -> Unit,
     onRetry: () -> Unit,
@@ -29,9 +29,7 @@ fun BluetoothCheckScreen(
     val colorScheme = MaterialTheme.colorScheme
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
+        modifier = modifier.padding(32.dp),
         contentAlignment = Alignment.Center
     ) {
         when (status) {
@@ -144,18 +142,20 @@ private fun BluetoothDisabledContent(
                     )
                 }
 
-                OutlinedButton(
-                    onClick = onRetry,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Check Again",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontFamily = FontFamily.Monospace
-                        ),
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    )
-                }
+                //Since we are automatically checking bluetooth state -- commented
+
+//                OutlinedButton(
+//                    onClick = onRetry,
+//                    modifier = Modifier.fillMaxWidth()
+//                ) {
+//                    Text(
+//                        text = "Check Again",
+//                        style = MaterialTheme.typography.bodyMedium.copy(
+//                            fontFamily = FontFamily.Monospace
+//                        ),
+//                        modifier = Modifier.padding(vertical = 4.dp)
+//                    )
+//                }
             }
         }
     }
@@ -222,7 +222,7 @@ private fun BluetoothCheckingContent(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "bitchat*",
+            text = "bitchat",
             style = MaterialTheme.typography.headlineLarge.copy(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,

@@ -6,6 +6,7 @@ import android.util.Log
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 
 /**
  * Power-optimized Bluetooth connection manager with comprehensive memory management
@@ -41,6 +42,7 @@ class BluetoothConnectionManager(
     // Delegate for component managers to call back to main manager
     private val componentDelegate = object : BluetoothConnectionManagerDelegate {
         override fun onPacketReceived(packet: BitchatPacket, peerID: String, device: BluetoothDevice?) {
+            Log.d(TAG, "onPacketReceived: Packet received from ${device?.address} ($peerID)")
             device?.let { bluetoothDevice ->
                 // Get current RSSI for this device and update if available
                 val currentRSSI = connectionTracker.getBestRSSI(bluetoothDevice.address)
@@ -48,11 +50,18 @@ class BluetoothConnectionManager(
                     delegate?.onRSSIUpdated(bluetoothDevice.address, currentRSSI)
                 }
             }
+
+            if (peerID == myPeerID) return // Ignore messages from self
+
             delegate?.onPacketReceived(packet, peerID, device)
         }
         
         override fun onDeviceConnected(device: BluetoothDevice) {
             delegate?.onDeviceConnected(device)
+        }
+
+        override fun onDeviceDisconnected(device: BluetoothDevice) {
+            delegate?.onDeviceDisconnected(device)
         }
         
         override fun onRSSIUpdated(deviceAddress: String, rssi: Int) {
@@ -78,6 +87,44 @@ class BluetoothConnectionManager(
     
     init {
         powerManager.delegate = this
+        // Observe debug settings to enforce role state while active
+        try {
+            val dbg = com.bitchat.android.ui.debug.DebugSettingsManager.getInstance()
+            // Role enable/disable
+            connectionScope.launch {
+                dbg.gattServerEnabled.collect { enabled ->
+                    if (!isActive) return@collect
+                    if (enabled) startServer() else stopServer()
+                }
+            }
+            connectionScope.launch {
+                dbg.gattClientEnabled.collect { enabled ->
+                    if (!isActive) return@collect
+                    if (enabled) startClient() else stopClient()
+                }
+            }
+            // Connection caps: enforce on change
+            connectionScope.launch {
+                dbg.maxConnectionsOverall.collect {
+                    if (!isActive) return@collect
+                    connectionTracker.enforceConnectionLimits()
+                    // Also enforce server side best-effort
+                    serverManager.enforceServerLimit(dbg.maxServerConnections.value)
+                }
+            }
+            connectionScope.launch {
+                dbg.maxClientConnections.collect {
+                    if (!isActive) return@collect
+                    connectionTracker.enforceConnectionLimits()
+                }
+            }
+            connectionScope.launch {
+                dbg.maxServerConnections.collect {
+                    if (!isActive) return@collect
+                    serverManager.enforceServerLimit(dbg.maxServerConnections.value)
+                }
+            }
+        } catch (_: Exception) { }
     }
     
     /**
@@ -98,7 +145,17 @@ class BluetoothConnectionManager(
         
         try {
             isActive = true
-            
+
+        // set the adapter's name to our 8-character peerID for iOS privacy, TODO: Make this configurable
+        // try {
+        //     if (bluetoothAdapter?.name != myPeerID) {
+        //         bluetoothAdapter?.name = myPeerID
+        //         Log.d(TAG, "Set Bluetooth adapter name to peerID: $myPeerID for iOS compatibility.")
+        //     }
+        // } catch (se: SecurityException) {
+        //     Log.e(TAG, "Missing BLUETOOTH_CONNECT permission to set adapter name.", se)
+        // }
+
             // Start all component managers
             connectionScope.launch {
                 // Start connection tracker first
@@ -107,18 +164,29 @@ class BluetoothConnectionManager(
                 // Start power manager
                 powerManager.start()
                 
-                // Start server manager
-                if (!serverManager.start()) {
-                    Log.e(TAG, "Failed to start server manager")
-                    this@BluetoothConnectionManager.isActive = false
-                    return@launch
+                // Start server/client based on debug settings
+                val dbg = try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (_: Exception) { null }
+                val startServer = dbg?.gattServerEnabled?.value != false
+                val startClient = dbg?.gattClientEnabled?.value != false
+
+                if (startServer) {
+                    if (!serverManager.start()) {
+                        Log.e(TAG, "Failed to start server manager")
+                        this@BluetoothConnectionManager.isActive = false
+                        return@launch
+                    }
+                } else {
+                    Log.i(TAG, "GATT Server disabled by debug settings; not starting")
                 }
-                
-                // Start client manager
-                if (!clientManager.start()) {
-                    Log.e(TAG, "Failed to start client manager")
-                    this@BluetoothConnectionManager.isActive = false
-                    return@launch
+
+                if (startClient) {
+                    if (!clientManager.start()) {
+                        Log.e(TAG, "Failed to start client manager")
+                        this@BluetoothConnectionManager.isActive = false
+                        return@launch
+                    }
+                } else {
+                    Log.i(TAG, "GATT Client disabled by debug settings; not starting")
                 }
                 
                 Log.i(TAG, "Bluetooth services started successfully")
@@ -180,6 +248,58 @@ class BluetoothConnectionManager(
         )
     }
     
+
+    // Expose role controls for debug UI
+    fun startServer() { connectionScope.launch { serverManager.start() } }
+    fun stopServer() { connectionScope.launch { serverManager.stop() } }
+    fun startClient() { connectionScope.launch { clientManager.start() } }
+    fun stopClient() { connectionScope.launch { clientManager.stop() } }
+
+    // Inject nickname resolver for broadcaster logs
+    fun setNicknameResolver(resolver: (String) -> String?) { packetBroadcaster.setNicknameResolver(resolver) }
+
+    // Debug snapshots for connected devices
+    fun getConnectedDeviceEntries(): List<Triple<String, Boolean, Int?>> {
+        return try {
+            connectionTracker.getConnectedDevices().values.map { dc ->
+                val rssi = if (dc.rssi != Int.MIN_VALUE) dc.rssi else null
+                Triple(dc.device.address, dc.isClient, rssi)
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    // Expose local adapter address for debug UI
+    fun getLocalAdapterAddress(): String? = try { bluetoothAdapter?.address } catch (e: Exception) { null }
+
+    fun isClientConnection(address: String): Boolean? {
+        return try { connectionTracker.getConnectedDevices()[address]?.isClient } catch (e: Exception) { null }
+    }
+
+    /**
+     * Public: connect/disconnect helpers for debug UI
+     */
+    fun connectToAddress(address: String): Boolean = clientManager.connectToAddress(address)
+    fun disconnectAddress(address: String) { connectionTracker.disconnectDevice(address) }
+
+
+    // Optionally disconnect all connections (server and client)
+    fun disconnectAll() {
+        connectionScope.launch {
+            // Stop and restart to force disconnects
+            clientManager.stop()
+            serverManager.stop()
+            delay(200)
+            if (isActive) {
+                // Restart managers if service is active
+                serverManager.start()
+                clientManager.start()
+            }
+        }
+    }
+
+
     /**
      * Get connected device count
      */
@@ -209,23 +329,38 @@ class BluetoothConnectionManager(
         Log.i(TAG, "Power mode changed to: $newMode")
         
         connectionScope.launch {
-            // CRITICAL FIX: Avoid rapid scan restarts by checking if we need to change scan behavior
+            // Avoid rapid scan restarts by checking if we need to change scan behavior
             val wasUsingDutyCycle = powerManager.shouldUseDutyCycle()
             
-            // Update advertising with new power settings
-            serverManager.restartAdvertising()
+            // Update advertising with new power settings if server enabled
+            val serverEnabled = try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance().gattServerEnabled.value } catch (_: Exception) { true }
+            if (serverEnabled) {
+                serverManager.restartAdvertising()
+            } else {
+                serverManager.stop()
+            }
             
             // Only restart scanning if the duty cycle behavior changed
             val nowUsingDutyCycle = powerManager.shouldUseDutyCycle()
             if (wasUsingDutyCycle != nowUsingDutyCycle) {
                 Log.d(TAG, "Duty cycle behavior changed (${wasUsingDutyCycle} -> ${nowUsingDutyCycle}), restarting scan")
-                clientManager.restartScanning()
+                val clientEnabled = try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance().gattClientEnabled.value } catch (_: Exception) { true }
+                if (clientEnabled) {
+                    clientManager.restartScanning()
+                } else {
+                    clientManager.stop()
+                }
             } else {
                 Log.d(TAG, "Duty cycle behavior unchanged, keeping existing scan state")
             }
             
             // Enforce connection limits
             connectionTracker.enforceConnectionLimits()
+            // Best-effort server cap
+            try {
+                val maxServer = com.bitchat.android.ui.debug.DebugSettingsManager.getInstance().maxServerConnections.value
+                serverManager.enforceServerLimit(maxServer)
+            } catch (_: Exception) { }
         }
     }
     
@@ -242,5 +377,6 @@ class BluetoothConnectionManager(
 interface BluetoothConnectionManagerDelegate {
     fun onPacketReceived(packet: BitchatPacket, peerID: String, device: BluetoothDevice?)
     fun onDeviceConnected(device: BluetoothDevice)
+    fun onDeviceDisconnected(device: BluetoothDevice)
     fun onRSSIUpdated(deviceAddress: String, rssi: Int)
 }

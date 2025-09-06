@@ -12,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -24,10 +23,9 @@ import com.bitchat.android.R
  * Screen shown when checking battery optimization status or requesting battery optimization disable
  */
 
-
-
 @Composable
 fun BatteryOptimizationScreen(
+    modifier: Modifier,
     status: BatteryOptimizationStatus,
     onDisableBatteryOptimization: () -> Unit,
     onRetry: () -> Unit,
@@ -37,9 +35,7 @@ fun BatteryOptimizationScreen(
     val colorScheme = MaterialTheme.colorScheme
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
+        modifier = modifier.padding(32.dp),
         contentAlignment = Alignment.Center
     ) {
         when (status) {
@@ -90,7 +86,7 @@ private fun BatteryOptimizationEnabledContent(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "bitchat*",
+                text = "bitchat",
                 style = MaterialTheme.typography.headlineLarge.copy(
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
@@ -214,7 +210,7 @@ private fun BatteryOptimizationCheckingContent(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "bitchat*",
+            text = "bitchat",
             style = MaterialTheme.typography.headlineLarge.copy(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
@@ -271,7 +267,7 @@ private fun BatteryOptimizationNotSupportedContent(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "bitchat*",
+            text = "bitchat",
             style = MaterialTheme.typography.headlineLarge.copy(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,

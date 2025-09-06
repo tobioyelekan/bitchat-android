@@ -4,24 +4,18 @@ import android.os.Parcelable
 import kotlinx.parcelize.Parcelize
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.*
+import android.util.Log
 
 /**
- * Message types - exact same as iOS version
+ * Message types - exact same as iOS version with Noise Protocol support
  */
 enum class MessageType(val value: UByte) {
     ANNOUNCE(0x01u),
-    KEY_EXCHANGE(0x02u),
+    MESSAGE(0x02u),  // All user messages (private and broadcast)
     LEAVE(0x03u),
-    MESSAGE(0x04u),
-    FRAGMENT_START(0x05u),
-    FRAGMENT_CONTINUE(0x06u),
-    FRAGMENT_END(0x07u),
-    CHANNEL_ANNOUNCE(0x08u),
-    CHANNEL_RETENTION(0x09u),
-    DELIVERY_ACK(0x0Au),
-    DELIVERY_STATUS_REQUEST(0x0Bu),
-    READ_RECEIPT(0x0Cu);
+    NOISE_HANDSHAKE(0x10u),  // Noise handshake
+    NOISE_ENCRYPTED(0x11u),  // Noise encrypted transport message
+    FRAGMENT(0x20u); // Fragmentation for large packets
 
     companion object {
         fun fromValue(value: UByte): MessageType? {
@@ -62,7 +56,7 @@ data class BitchatPacket(
     val recipientID: ByteArray? = null,
     val timestamp: ULong,
     val payload: ByteArray,
-    val signature: ByteArray? = null,
+    var signature: ByteArray? = null,  // Changed from val to var for packet signing
     var ttl: UByte
 ) : Parcelable {
 
@@ -74,7 +68,7 @@ data class BitchatPacket(
     ) : this(
         version = 1u,
         type = type,
-        senderID = senderID.toByteArray(),
+        senderID = hexStringToByteArray(senderID),
         recipientID = null,
         timestamp = (System.currentTimeMillis()).toULong(),
         payload = payload,
@@ -86,9 +80,50 @@ data class BitchatPacket(
         return BinaryProtocol.encode(this)
     }
 
+    /**
+     * Create binary representation for signing (without signature and TTL fields)
+     * TTL is excluded because it changes during packet relay operations
+     */
+    fun toBinaryDataForSigning(): ByteArray? {
+        // Create a copy without signature and with fixed TTL for signing
+        // TTL must be excluded because it changes during relay
+        val unsignedPacket = BitchatPacket(
+            version = version,
+            type = type,
+            senderID = senderID,
+            recipientID = recipientID,
+            timestamp = timestamp,
+            payload = payload,
+            signature = null, // Remove signature for signing
+            ttl = 0u // Use fixed TTL=0 for signing to ensure relay compatibility
+        )
+        return BinaryProtocol.encode(unsignedPacket)
+    }
+
     companion object {
         fun fromBinaryData(data: ByteArray): BitchatPacket? {
             return BinaryProtocol.decode(data)
+        }
+        
+        /**
+         * Convert hex string peer ID to binary data (8 bytes) - exactly same as iOS
+         */
+        private fun hexStringToByteArray(hexString: String): ByteArray {
+            val result = ByteArray(8) { 0 } // Initialize with zeros, exactly 8 bytes
+            var tempID = hexString
+            var index = 0
+            
+            while (tempID.length >= 2 && index < 8) {
+                val hexByte = tempID.substring(0, 2)
+                val byte = hexByte.toIntOrNull(16)?.toByte()
+                if (byte != null) {
+                    result[index] = byte
+                }
+                tempID = tempID.substring(2)
+                index++
+            }
+            
+            return result
         }
     }
 
@@ -219,18 +254,38 @@ object BinaryProtocol {
             val result = ByteArray(buffer.position())
             buffer.rewind()
             buffer.get(result)
-            return result
+            
+            // Apply padding to standard block sizes for traffic analysis resistance
+            val optimalSize = MessagePadding.optimalBlockSize(result.size)
+            val paddedData = MessagePadding.pad(result, optimalSize)
+            
+            return paddedData
             
         } catch (e: Exception) {
+            Log.e("BinaryProtocol", "Error encoding packet type ${packet.type}: ${e.message}")
             return null
         }
     }
     
     fun decode(data: ByteArray): BitchatPacket? {
+        // Try decode as-is first (robust when padding wasn't applied) - iOS fix
+        decodeCore(data)?.let { return it }
+        
+        // If that fails, try after removing padding
+        val unpadded = MessagePadding.unpad(data)
+        if (unpadded.contentEquals(data)) return null // No padding was removed, already failed
+        
+        return decodeCore(unpadded)
+    }
+    
+    /**
+     * Core decoding implementation used by decode() with and without padding removal - iOS fix
+     */
+    private fun decodeCore(raw: ByteArray): BitchatPacket? {
         try {
-            if (data.size < HEADER_SIZE + SENDER_ID_SIZE) return null
+            if (raw.size < HEADER_SIZE + SENDER_ID_SIZE) return null
             
-            val buffer = ByteBuffer.wrap(data).apply { order(ByteOrder.BIG_ENDIAN) }
+            val buffer = ByteBuffer.wrap(raw).apply { order(ByteOrder.BIG_ENDIAN) }
             
             // Header
             val version = buffer.get().toUByte()
@@ -256,7 +311,7 @@ object BinaryProtocol {
             if (hasRecipient) expectedSize += RECIPIENT_ID_SIZE
             if (hasSignature) expectedSize += SIGNATURE_SIZE
             
-            if (data.size < expectedSize) return null
+            if (raw.size < expectedSize) return null
             
             // SenderID
             val senderID = ByteArray(SENDER_ID_SIZE)
@@ -306,29 +361,8 @@ object BinaryProtocol {
             )
             
         } catch (e: Exception) {
+            Log.e("BinaryProtocol", "Error decoding packet: ${e.message}")
             return null
         }
-    }
-}
-
-/**
- * Compression utilities - temporarily disabled for initial build
- */
-object CompressionUtil {
-    private const val COMPRESSION_THRESHOLD = 100  // bytes
-    
-    fun shouldCompress(data: ByteArray): Boolean {
-        // Temporarily disabled compression
-        return false
-    }
-    
-    fun compress(data: ByteArray): ByteArray? {
-        // Temporarily disabled compression
-        return null
-    }
-    
-    fun decompress(compressedData: ByteArray, originalSize: Int): ByteArray? {
-        // Temporarily disabled compression
-        return null
     }
 }

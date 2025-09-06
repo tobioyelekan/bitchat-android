@@ -6,16 +6,18 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.material3.Scaffold
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.ViewModelProvider
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.Lifecycle
 import com.bitchat.android.mesh.BluetoothMeshService
@@ -37,6 +39,7 @@ import com.bitchat.android.onboarding.PermissionManager
 import com.bitchat.android.ui.ChatScreen
 import com.bitchat.android.ui.ChatViewModel
 import com.bitchat.android.ui.theme.BitchatTheme
+import com.bitchat.android.nostr.PoWPreferenceManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -60,16 +63,16 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-
-    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Initialize core mesh service first
-        meshService = BluetoothMeshService(this)
-        
+        // Enable edge-to-edge display for modern Android look
+        enableEdgeToEdge()
+
         // Initialize permission management
         permissionManager = PermissionManager(this)
+        // Initialize core mesh service first
+        meshService = BluetoothMeshService(this)
         bluetoothStatusManager = BluetoothStatusManager(
             activity = this,
             context = this,
@@ -97,11 +100,14 @@ class MainActivity : ComponentActivity() {
         
         setContent {
             BitchatTheme {
-                Surface(
+                Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    OnboardingFlowScreen()
+                    containerColor = MaterialTheme.colorScheme.background
+                ) { innerPadding ->
+                    OnboardingFlowScreen(modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                    )
                 }
             }
         }
@@ -123,7 +129,8 @@ class MainActivity : ComponentActivity() {
     }
     
     @Composable
-    private fun OnboardingFlowScreen() {
+    private fun OnboardingFlowScreen(modifier: Modifier = Modifier) {
+        val context = LocalContext.current
         val onboardingState by mainViewModel.onboardingState.collectAsState()
         val bluetoothStatus by mainViewModel.bluetoothStatus.collectAsState()
         val locationStatus by mainViewModel.locationStatus.collectAsState()
@@ -132,14 +139,37 @@ class MainActivity : ComponentActivity() {
         val isBluetoothLoading by mainViewModel.isBluetoothLoading.collectAsState()
         val isLocationLoading by mainViewModel.isLocationLoading.collectAsState()
         val isBatteryOptimizationLoading by mainViewModel.isBatteryOptimizationLoading.collectAsState()
-        
+
+        DisposableEffect(context, bluetoothStatusManager) {
+
+            val receiver = bluetoothStatusManager.monitorBluetoothState(
+                context = context,
+                bluetoothStatusManager = bluetoothStatusManager,
+                onBluetoothStateChanged = { status ->
+                    if (status == BluetoothStatus.ENABLED && onboardingState == OnboardingState.BLUETOOTH_CHECK) {
+                        checkBluetoothAndProceed()
+                    }
+                }
+            )
+
+            onDispose {
+                try {
+                    context.unregisterReceiver(receiver)
+                    Log.d("BluetoothStatusUI", "BroadcastReceiver unregistered")
+                } catch (e: IllegalStateException) {
+                    Log.w("BluetoothStatusUI", "Receiver was not registered")
+                }
+            }
+        }
+
         when (onboardingState) {
             OnboardingState.CHECKING -> {
-                InitializingScreen()
+                InitializingScreen(modifier)
             }
             
             OnboardingState.BLUETOOTH_CHECK -> {
                 BluetoothCheckScreen(
+                    modifier = modifier,
                     status = bluetoothStatus,
                     onEnableBluetooth = {
                         mainViewModel.updateBluetoothLoading(true)
@@ -154,6 +184,7 @@ class MainActivity : ComponentActivity() {
             
             OnboardingState.LOCATION_CHECK -> {
                 LocationCheckScreen(
+                    modifier = modifier,
                     status = locationStatus,
                     onEnableLocation = {
                         mainViewModel.updateLocationLoading(true)
@@ -168,6 +199,7 @@ class MainActivity : ComponentActivity() {
             
             OnboardingState.BATTERY_OPTIMIZATION_CHECK -> {
                 BatteryOptimizationScreen(
+                    modifier = modifier,
                     status = batteryOptimizationStatus,
                     onDisableBatteryOptimization = {
                         mainViewModel.updateBatteryOptimizationLoading(true)
@@ -186,6 +218,7 @@ class MainActivity : ComponentActivity() {
             
             OnboardingState.PERMISSION_EXPLANATION -> {
                 PermissionExplanationScreen(
+                    modifier = modifier,
                     permissionCategories = permissionManager.getCategorizedPermissions(),
                     onContinue = {
                         mainViewModel.updateOnboardingState(OnboardingState.PERMISSION_REQUESTING)
@@ -195,11 +228,11 @@ class MainActivity : ComponentActivity() {
             }
             
             OnboardingState.PERMISSION_REQUESTING -> {
-                InitializingScreen()
+                InitializingScreen(modifier)
             }
             
             OnboardingState.INITIALIZING -> {
-                InitializingScreen()
+                InitializingScreen(modifier)
             }
             
             OnboardingState.COMPLETE -> {
@@ -209,7 +242,7 @@ class MainActivity : ComponentActivity() {
                         // Let ChatViewModel handle navigation state
                         val handled = chatViewModel.handleBackPressed()
                         if (!handled) {
-                            // If ChatViewModel doesn't handle it, disable this callback 
+                            // If ChatViewModel doesn't handle it, disable this callback
                             // and let the system handle it (which will exit the app)
                             this.isEnabled = false
                             onBackPressedDispatcher.onBackPressed()
@@ -217,15 +250,15 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                
+
                 // Add the callback - this will be automatically removed when the activity is destroyed
                 onBackPressedDispatcher.addCallback(this, backCallback)
-                
                 ChatScreen(viewModel = chatViewModel)
             }
             
             OnboardingState.ERROR -> {
                 InitializationErrorScreen(
+                    modifier = modifier,
                     errorMessage = errorMessage,
                     onRetry = {
                         mainViewModel.updateOnboardingState(OnboardingState.CHECKING)
@@ -561,6 +594,10 @@ class MainActivity : ComponentActivity() {
                 
                 Log.d("MainActivity", "Permissions verified, initializing chat system")
                 
+                // Initialize PoW preferences early in the initialization process
+                PoWPreferenceManager.init(this@MainActivity)
+                Log.d("MainActivity", "PoW preferences initialized")
+                
                 // Ensure all permissions are still granted (user might have revoked in settings)
                 if (!permissionManager.areAllPermissionsGranted()) {
                     val missing = permissionManager.getMissingPermissions()
@@ -568,7 +605,7 @@ class MainActivity : ComponentActivity() {
                     handleOnboardingFailed("Some permissions were revoked. Please grant all permissions to continue.")
                     return@launch
                 }
-                
+
                 // Set up mesh service delegate and start services
                 meshService.delegate = chatViewModel
                 meshService.startServices()
@@ -626,7 +663,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    override fun onPause() {
+     override fun onPause() {
         super.onPause()
         // Only set background state if app is fully initialized
         if (mainViewModel.onboardingState.value == OnboardingState.COMPLETE) {
@@ -637,7 +674,7 @@ class MainActivity : ComponentActivity() {
     }
     
     /**
-     * Handle intents from notification clicks - open specific private chat
+     * Handle intents from notification clicks - open specific private chat or geohash chat
      */
     private fun handleNotificationIntent(intent: Intent) {
         val shouldOpenPrivateChat = intent.getBooleanExtra(
@@ -645,22 +682,57 @@ class MainActivity : ComponentActivity() {
             false
         )
         
-        if (shouldOpenPrivateChat) {
-            val peerID = intent.getStringExtra(com.bitchat.android.ui.NotificationManager.EXTRA_PEER_ID)
-            val senderNickname = intent.getStringExtra(com.bitchat.android.ui.NotificationManager.EXTRA_SENDER_NICKNAME)
+        val shouldOpenGeohashChat = intent.getBooleanExtra(
+            com.bitchat.android.ui.NotificationManager.EXTRA_OPEN_GEOHASH_CHAT,
+            false
+        )
+        
+        when {
+            shouldOpenPrivateChat -> {
+                val peerID = intent.getStringExtra(com.bitchat.android.ui.NotificationManager.EXTRA_PEER_ID)
+                val senderNickname = intent.getStringExtra(com.bitchat.android.ui.NotificationManager.EXTRA_SENDER_NICKNAME)
+                
+                if (peerID != null) {
+                    Log.d("MainActivity", "Opening private chat with $senderNickname (peerID: $peerID) from notification")
+                    
+                    // Open the private chat with this peer
+                    chatViewModel.startPrivateChat(peerID)
+                    
+                    // Clear notifications for this sender since user is now viewing the chat
+                    chatViewModel.clearNotificationsForSender(peerID)
+                }
+            }
             
-            if (peerID != null) {
-                Log.d("MainActivity", "Opening private chat with $senderNickname (peerID: $peerID) from notification")
+            shouldOpenGeohashChat -> {
+                val geohash = intent.getStringExtra(com.bitchat.android.ui.NotificationManager.EXTRA_GEOHASH)
                 
-                // Open the private chat with this peer
-                chatViewModel.startPrivateChat(peerID)
-                
-                // Clear notifications for this sender since user is now viewing the chat
-                chatViewModel.clearNotificationsForSender(peerID)
+                if (geohash != null) {
+                    Log.d("MainActivity", "Opening geohash chat #$geohash from notification")
+                    
+                    // Switch to the geohash channel - create appropriate geohash channel level
+                    val level = when (geohash.length) {
+                        7 -> com.bitchat.android.geohash.GeohashChannelLevel.BLOCK
+                        6 -> com.bitchat.android.geohash.GeohashChannelLevel.NEIGHBORHOOD
+                        5 -> com.bitchat.android.geohash.GeohashChannelLevel.CITY
+                        4 -> com.bitchat.android.geohash.GeohashChannelLevel.PROVINCE
+                        2 -> com.bitchat.android.geohash.GeohashChannelLevel.REGION
+                        else -> com.bitchat.android.geohash.GeohashChannelLevel.CITY // Default fallback
+                    }
+                    val geohashChannel = com.bitchat.android.geohash.GeohashChannel(level, geohash)
+                    val channelId = com.bitchat.android.geohash.ChannelID.Location(geohashChannel)
+                    chatViewModel.selectLocationChannel(channelId)
+                    
+                    // Update current geohash state for notifications
+                    chatViewModel.setCurrentGeohash(geohash)
+                    
+                    // Clear notifications for this geohash since user is now viewing it
+                    chatViewModel.clearNotificationsForGeohash(geohash)
+                }
             }
         }
     }
 
+    
     override fun onDestroy() {
         super.onDestroy()
         
